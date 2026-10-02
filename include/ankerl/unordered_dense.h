@@ -2014,6 +2014,10 @@ template <class Key,
           bool IsSegmented>
 class table : public std::conditional_t<is_map_v<T>, base_table_type_map<T>, base_table_type_set> {
     using underlying_value_type = std::conditional_t<is_map_v<T>, std::pair<Key, T>, Key>;
+    // With an allocator whose pointer is a fancy pointer, for example boost::interprocess::offset_ptr,
+    // the values are in std::vector with that allocator. libstdc++'s vector iterator then has no
+    // operator-> that compiles, so the table reads a value through an iterator as `(*it).second`,
+    // never as `it->second`.
     using underlying_container_type = std::conditional_t<IsSegmented,
                                                          segmented_vector<underlying_value_type, AllocatorOrContainer>,
                                                          std::vector<underlying_value_type, AllocatorOrContainer>>;
@@ -3206,7 +3210,7 @@ private:
         static_assert(!is_view_v, "map_view and set_view are read only");
         auto it_isinserted = try_emplace(std::forward<K>(key), std::forward<M>(mapped));
         if (!it_isinserted.second) {
-            it_isinserted.first->second = std::forward<M>(mapped);
+            (*it_isinserted.first).second = std::forward<M>(mapped);
         }
         return it_isinserted;
     }
@@ -3834,7 +3838,7 @@ private:
     auto do_at(K const& key) -> mapped_ref<Q> {
         if (auto it = find(key); ANKERL_UNORDERED_DENSE_LIKELY(end() != it))
             ANKERL_UNORDERED_DENSE_LIKELY_ATTR {
-                return it->second;
+                return (*it).second;
             }
         on_error_key_not_found();
     }
@@ -3848,7 +3852,7 @@ private:
     auto do_at(K const& key, precomputed_hash ph) -> mapped_ref<Q> {
         if (auto it = find(key, ph); ANKERL_UNORDERED_DENSE_LIKELY(end() != it))
             ANKERL_UNORDERED_DENSE_LIKELY_ATTR {
-                return it->second;
+                return (*it).second;
             }
         on_error_key_not_found();
     }
@@ -4676,13 +4680,13 @@ public:
     template <typename Q = T, std::enable_if_t<is_map_v<Q>, bool> = true>
     ANKERL_UNORDERED_DENSE_FORCEINLINE auto operator[](Key const& key) -> Q& {
         static_assert(!is_view_v, "map_view and set_view are read only");
-        return try_emplace(key).first->second;
+        return (*try_emplace(key).first).second;
     }
 
     template <typename Q = T, std::enable_if_t<is_map_v<Q>, bool> = true>
     ANKERL_UNORDERED_DENSE_FORCEINLINE auto operator[](Key&& key) -> Q& {
         static_assert(!is_view_v, "map_view and set_view are read only");
-        return try_emplace(std::move(key)).first->second;
+        return (*try_emplace(std::move(key)).first).second;
     }
 
     template <typename K,
@@ -4692,7 +4696,7 @@ public:
               std::enable_if_t<is_map_v<Q> && is_transparent_v<H, KE>, bool> = true>
     ANKERL_UNORDERED_DENSE_FORCEINLINE auto operator[](K&& key) -> Q& {
         static_assert(!is_view_v, "map_view and set_view are read only");
-        return try_emplace(std::forward<K>(key)).first->second;
+        return (*try_emplace(std::forward<K>(key)).first).second;
     }
 
     auto count(Key const& key) const -> std::size_t {
@@ -5093,7 +5097,7 @@ public:
             auto it = a.find(get_key(b_entry));
             if constexpr (is_map_v<T>) {
                 // map: check that key is here, then also check that value is the same
-                if (a.end() == it || !(b_entry.second == it->second)) {
+                if (a.end() == it || !(b_entry.second == (*it).second)) {
                     return false;
                 }
             } else {

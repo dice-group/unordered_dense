@@ -14,7 +14,14 @@
 #    include <boost/interprocess/containers/vector.hpp>
 #    include <boost/interprocess/managed_shared_memory.hpp>
 
+#    include <cstdint>
 #    include <deque>
+#    include <functional>
+#    include <string>
+#    include <string_view>
+#    include <type_traits>
+#    include <utility>
+#    include <vector>
 
 // Alias an STL-like allocator of ints that allocates ints from the segment
 using shmem_allocator =
@@ -117,6 +124,65 @@ TEST_CASE_TEMPLATE(
     REQUIRE(num_iter == total);
 
     REQUIRE(cmap.find(total + 123) == cmap.cend());
+}
+
+// A transparent string hash, so that operator[] with a string literal takes the template overload.
+struct shmem_string_hash {
+    using is_transparent = void;
+    using is_avalanching = void;
+
+    [[nodiscard]] auto operator()(std::string_view str) const noexcept -> std::uint64_t {
+        return ankerl::unordered_dense::hash<std::string_view>{}(str);
+    }
+};
+
+// The allocator as the last template parameter, not a container. The map then holds its values in
+// std::vector with that allocator, and the vector's pointer is boost::interprocess::offset_ptr.
+// The iterator of libstdc++'s vector returns that pointer from operator->, and offset_ptr does not
+// convert to a raw pointer, so `it->second` does not compile on it. operator[], at,
+// insert_or_assign and operator== read the mapped value through such an iterator. This test reads
+// it with `(*it).second` for the same reason.
+TEST_CASE("boost_allocator_parameter") {
+    using map_t = ankerl::unordered_dense::
+        map<int, std::string, ankerl::unordered_dense::hash<int>, std::equal_to<int>, shmem_allocator>;
+    static_assert(std::is_same_v<map_t::value_container_type, std::vector<std::pair<int, std::string>, shmem_allocator>>);
+
+    using string_allocator = boost::interprocess::allocator<std::pair<std::string, int>,
+                                                            boost::interprocess::managed_shared_memory::segment_manager>;
+    using string_map_t = ankerl::unordered_dense::map<std::string, int, shmem_string_hash, std::equal_to<>, string_allocator>;
+
+    auto remover = shm_remove();
+    auto segment = boost::interprocess::managed_shared_memory(boost::interprocess::create_only, "MySharedMemory", 1024 * 1024);
+    auto map = map_t{shmem_allocator{segment.get_segment_manager()}};
+
+    int const total = 100;
+    for (int i = 0; i < total; ++i) {
+        map[i] = std::to_string(i);
+    }
+    REQUIRE(map.size() == static_cast<size_t>(total));
+
+    int const key = 7;
+    map[key] += "!";
+    REQUIRE(map.at(key) == "7!");
+    REQUIRE(std::as_const(map).at(8) == "8");
+    REQUIRE(map.at(9, map.hash_for(9)) == "9");
+
+    auto const [it, inserted] = map.insert_or_assign(10, "ten");
+    REQUIRE_FALSE(inserted);
+    REQUIRE((*it).first == 10);
+    REQUIRE((*it).second == "ten");
+    REQUIRE(map.size() == static_cast<size_t>(total));
+
+    auto copy = map;
+    REQUIRE(copy == map);
+    (*copy.find(11)).second = "eleven";
+    REQUIRE_FALSE(copy == map);
+
+    auto string_map = string_map_t{string_allocator{segment.get_segment_manager()}};
+    string_map["one"] = 1;
+    string_map["one"] += 10;
+    REQUIRE(string_map.size() == 1U);
+    REQUIRE(string_map.at("one") == 11);
 }
 
 #endif // ANKERL_UNORDERED_DENSE_HAS_BOOST

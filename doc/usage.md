@@ -698,6 +698,8 @@ types.
 
 `unordered_dense` accepts a custom allocator, but you can also specify a custom container for that template argument. That way it is possible to replace the internally used `std::vector` with e.g. `std::deque` or any other container like `boost::interprocess::vector`. This supports fancy pointers (e.g. [offset_ptr](https://www.boost.org/doc/libs/1_80_0/doc/html/interprocess/offset_ptr.html)), so the container can be used with e.g. shared memory provided by `boost::interprocess`.
 
+An allocator with a fancy pointer, for example `boost::interprocess::allocator`, can also be given directly. `map` and `set` then keep their values in a `std::vector` with that allocator, and their iterators are the iterators of that vector. With libstdc++, `operator->` of these iterators does not compile for a pointer like `offset_ptr`: it returns the fancy pointer where the vector iterator promises a raw pointer. So with libstdc++, read an element as `(*it).second`, not as `it->second`. Or pass a container such as `boost::interprocess::vector` instead of the allocator. Its iterators have a working `operator->`. `segmented_map` and `segmented_set` have their own iterator and are not affected.
+
 ## `segmented_map` and `segmented_set`
 
 `ankerl::unordered_dense` provides a custom container implementation that has lower memory requirements than the default `std::vector`. Memory is not contiguous, but it can allocate segments without having to reallocate and move all the elements. In summary, this leads to
