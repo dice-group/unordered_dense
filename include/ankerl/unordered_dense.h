@@ -817,6 +817,58 @@ enum class trust : std::uint8_t { checked, unchecked };
 // How much of a table verify() checks: `spot` 16 values spread over the table, `full` every value.
 enum class verify_level : std::uint8_t { spot, full };
 
+namespace detail {
+
+// A value index of `sizeof(Low) + sizeof(High)` bytes at alignment 1, a width that no unsigned
+// integer has: `group48` below is a std::uint32_t and a std::uint16_t, six bytes. The value is
+// `low + high * 2^(8 * sizeof(Low))`. The bytes are `low` and then `high`, each in native byte
+// order, read and written with two memcpy, which compile to one load or store of each width. A byte
+// array needs no packed struct, which every compiler spells differently.
+//
+// The table does not compute with this type. It computes in std::size_t (value_idx_int_t below)
+// and converts only where it reads or writes a slot of a block. The conversions are implicit in both
+// directions, as they are for the unsigned integers basic_group takes otherwise, so code that reads
+// or writes a block's m_index is the same for both. A value of 2^(8 * sizeof) or more keeps its low
+// bytes. The table never stores one: its max_size() for this type is 2^(8 * sizeof).
+//
+// No constructor is declared, so the default one is trivial, as an integer's is: a default
+// initialized value index is indeterminate, a value initialized one is 0. An empty index is made of
+// value initialized blocks.
+template <typename Low, typename High>
+class packed_value_idx {
+    static_assert(std::is_unsigned_v<Low> && std::is_unsigned_v<High> && sizeof(Low) + sizeof(High) < sizeof(std::uint64_t),
+                  "two unsigned parts that are together narrower than a std::uint64_t");
+
+    std::array<std::uint8_t, sizeof(Low) + sizeof(High)> m_bytes;
+
+public:
+    // Implicit on purpose, see above.
+    // NOLINTNEXTLINE(google-explicit-constructor,hicpp-explicit-conversions)
+    operator std::size_t() const noexcept {
+        auto low = Low{};
+        auto high = High{};
+        std::memcpy(&low, m_bytes.data(), sizeof(Low));
+        std::memcpy(&high, m_bytes.data() + sizeof(Low), sizeof(High));
+        return static_cast<std::size_t>(std::uint64_t{low} | (std::uint64_t{high} << (8U * sizeof(Low))));
+    }
+
+    auto operator=(std::size_t value) noexcept -> packed_value_idx& {
+        auto const wide = static_cast<std::uint64_t>(value);
+        auto const low = static_cast<Low>(wide);
+        auto const high = static_cast<High>(wide >> (8U * sizeof(Low)));
+        std::memcpy(m_bytes.data(), &low, sizeof(Low));
+        std::memcpy(m_bytes.data() + sizeof(Low), &high, sizeof(High));
+        return *this;
+    }
+};
+
+// The integer a table computes value indices and group numbers in: the value index type itself when
+// it is an integer, and std::size_t for a packed_value_idx.
+template <typename ValueIdx>
+using value_idx_int_t = std::conditional_t<std::is_integral_v<ValueIdx>, ValueIdx, std::size_t>;
+
+} // namespace detail
+
 namespace bucket_type {
 
 // The index is groups of sixteen slots. A group holds one byte of fingerprint per slot, compared
@@ -827,8 +879,10 @@ namespace bucket_type {
 // https://github.com/martinus/unordered_dense/blob/main/doc/design.md and
 // group_storage::block below for why one block rather than two arrays.
 //
-// The width of the value index is the one thing the two bucket types differ in: `group` indexes
-// up to 2^32 values at 24 + 64 bytes per sixteen slots, `group_big` up to 2^63 at 24 + 128.
+// The width of the value index is the one thing the bucket types differ in: `group` indexes up to
+// 2^32 values at 24 + 64 bytes per sixteen slots, `group48` up to 2^48 at 24 + 96, and `group_big`
+// up to 2^63 at 24 + 128. ValueIdx is what each slot stores: an unsigned integer, or a
+// detail::packed_value_idx.
 template <typename ValueIdx>
 struct basic_group {
     using value_idx_type = ValueIdx;
@@ -837,6 +891,13 @@ struct basic_group {
 };
 
 using group = basic_group<std::uint32_t>;
+
+// Sixteen slots with a 48 bit value index each, for a table that can grow past 2^32 values: up to
+// 2^48 values (2^31 on a 32 bit target) at 120 bytes per group, against the 152 of `group_big`. An
+// array of 2^k groups rounded up to a power of two of bytes, which is what some allocators do with a
+// large allocation, is 128 bytes per group, as for `group`, where `group_big` takes 256.
+using group48 = basic_group<detail::packed_value_idx<std::uint32_t, std::uint16_t>>;
+
 using group_big = basic_group<std::size_t>;
 
 } // namespace bucket_type
@@ -1513,6 +1574,13 @@ static_assert(sizeof(group_block<bucket_type::group>) == 88 &&
 static_assert((sizeof(std::size_t) != 8 || sizeof(group_block<bucket_type::group_big>) == 152) &&
                   std::has_unique_object_representations_v<group_block<bucket_type::group_big>>,
               "group_block<group_big> must stay 152 bytes without padding on a 64 bit target");
+// group48's value index is six bytes on every target, at alignment 1, so its block is the same
+// 120 bytes on 32 and 64 bit and can start at any address.
+static_assert(sizeof(group_block<bucket_type::group48>) == 120 && alignof(group_block<bucket_type::group48>) == 1 &&
+                  std::has_unique_object_representations_v<group_block<bucket_type::group48>> &&
+                  std::is_trivially_copyable_v<group_block<bucket_type::group48>> &&
+                  std::is_trivially_default_constructible_v<group_block<bucket_type::group48>>,
+              "group_block<group48> must stay 120 bytes without padding, at alignment 1");
 
 // An empty table's index (#329): as many groups as the smallest array has, every slot empty and every
 // counter zero, shared by every table of this group type without an array of its own, and never
@@ -2161,7 +2229,13 @@ public:
     using precomputed_hash = detail::precomputed_hash<Hash>;
 
 private:
-    using value_idx_type = typename Bucket::value_idx_type;
+    // The integer value indices, group numbers and the group mask are computed in: what a slot stores
+    // when that is an integer, and std::size_t when it is a detail::packed_value_idx, as for group48.
+    // Such a slot is converted where it is read or written. Code that reads a slot declares
+    // value_idx_type rather than auto, so that the conversion reads the block itself: with auto, gcc
+    // keeps a copy of the packed bytes on the stack, two stores per candidate and a stack protector
+    // check per probe.
+    using value_idx_type = detail::value_idx_int_t<typename Bucket::value_idx_type>;
 
     // merge(source) takes the source apart and puts it back together: it compacts the elements that
     // stay behind and rebuilds the index over them once, neither of which the public API can
@@ -2392,6 +2466,8 @@ private:
     // blocks, and asking for the first and the *last* of them left out the middle -- where eight of
     // the sixteen value indices live. The clamp also keeps a block that does not reach the second
     // line, such as the 64 byte layout measured in #250's neighbourhood, from asking past itself.
+    // For `group48` the second address is the last byte as well, 119: a 120 byte block spans two or
+    // three lines, and the probe reads the first while these two ask for the others.
     template <typename Block>
     static void prefetch_index(Block const* blocks, value_idx_type group_idx) {
         // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast) -- byte arithmetic on the block
@@ -2454,7 +2530,7 @@ private:
             auto lanes = match_fingerprint(group, word);
             while (lanes != 0) {
                 auto const lane = first_lane(lanes);
-                auto const value_idx = group.m_index[lane];
+                value_idx_type const value_idx = group.m_index[lane];
                 if (m_equal(key, get_key(m_values[value_idx]))) {
                     return {group_idx, value_idx, static_cast<std::uint8_t>(lane), true};
                 }
@@ -2525,7 +2601,7 @@ private:
         auto lanes = match_fingerprint(home, word);
         while (lanes != 0) {
             auto const lane = first_lane(lanes);
-            auto const value_idx = home.m_index[lane];
+            value_idx_type const value_idx = home.m_index[lane];
             if (m_equal(key, get_key(m_values[value_idx]))) {
                 return {home_idx, value_idx, static_cast<std::uint8_t>(lane), true};
             }
@@ -2549,7 +2625,7 @@ private:
             auto lanes = match_fingerprint(home, word);
             while (lanes != 0) {
                 auto const lane = first_lane(lanes);
-                auto const value_idx = home.m_index[lane];
+                value_idx_type const value_idx = home.m_index[lane];
                 if (m_equal(key, get_key(m_values[value_idx]))) {
                     return {home_idx, value_idx, static_cast<std::uint8_t>(lane), true};
                 }
@@ -3661,7 +3737,7 @@ private:
         auto const& home = groups[home_idx];
         auto lanes = match_fingerprint(home, word);
         while (lanes != 0) {
-            auto const value_idx = home.m_index[first_lane(lanes)];
+            value_idx_type const value_idx = home.m_index[first_lane(lanes)];
             if (m_equal(key, get_key(m_values[value_idx]))) {
                 return {begin() + static_cast<difference_type>(value_idx), false};
             }
@@ -3777,7 +3853,7 @@ private:
                 auto remaining = lanes[i];
                 while (remaining != 0) {
                     auto const lane = first_lane(remaining);
-                    auto const value_idx = group.m_index[lane];
+                    value_idx_type const value_idx = group.m_index[lane];
                     if (m_equal(*first, get_key(m_values[value_idx]))) {
                         element = &m_values[value_idx];
                         break;
@@ -4144,11 +4220,16 @@ public:
         return m_values.size();
     }
 
+    // As many values as a slot's value index can tell apart, 2^bits for a value index of that many
+    // bits. A value index as wide as a std::size_t or wider gives 2^(bits of std::size_t - 1). The
+    // width is what a slot stores, not the integer the table computes in: 48 bits for group48.
     [[nodiscard]] static constexpr auto max_size() noexcept -> std::size_t {
-        if constexpr ((std::numeric_limits<value_idx_type>::max)() == (std::numeric_limits<std::size_t>::max)()) {
-            return std::size_t{1} << (sizeof(value_idx_type) * 8 - 1);
+        constexpr auto value_idx_bits = sizeof(typename Bucket::value_idx_type) * 8U;
+        constexpr auto size_bits = sizeof(std::size_t) * 8U;
+        if constexpr (value_idx_bits >= size_bits) {
+            return std::size_t{1} << (size_bits - 1U);
         } else {
-            return std::size_t{1} << (sizeof(value_idx_type) * 8);
+            return std::size_t{1} << value_idx_bits;
         }
     }
 

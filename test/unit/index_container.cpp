@@ -300,7 +300,11 @@ static_assert(
         ud::detail::index_container_for<ud::bucket_type::group, ud::segmented_vector<ic_pair>, ud::segmented_vector<ic_pair>>,
         ud::detail::group_storage<ud::bucket_type::group, std::allocator<ic_pair>>>);
 
-TEST_CASE_TEMPLATE("index_container_table_inside_a_blob", Bucket, ud::bucket_type::group, ud::bucket_type::group_big) {
+TEST_CASE_TEMPLATE("index_container_table_inside_a_blob",
+                   Bucket,
+                   ud::bucket_type::group,
+                   ud::bucket_type::group48,
+                   ud::bucket_type::group_big) {
     using table_t = ic_blob_table<Bucket>;
     using block = ud::detail::group_block<Bucket>;
     auto source = ic_source_map<Bucket>();
@@ -347,7 +351,11 @@ TEST_CASE_TEMPLATE("index_container_table_inside_a_blob", Bucket, ud::bucket_typ
     static_assert(std::is_trivially_destructible_v<table_t>);
 }
 
-TEST_CASE_TEMPLATE("index_container_owning_forwards_to_vector", Bucket, ud::bucket_type::group, ud::bucket_type::group_big) {
+TEST_CASE_TEMPLATE("index_container_owning_forwards_to_vector",
+                   Bucket,
+                   ud::bucket_type::group,
+                   ud::bucket_type::group48,
+                   ud::bucket_type::group_big) {
     using table_t = ic_owning_table<Bucket>;
     auto t = table_t();
     auto ref = std::unordered_map<std::uint64_t, std::uint64_t>();

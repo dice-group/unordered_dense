@@ -137,6 +137,18 @@ TEST_CASE_TEMPLATE("index_view_round_trip",
                            std::equal_to<std::string>,
                            std::allocator<std::pair<std::string, std::size_t>>,
                            ud::bucket_type::group_big>,
+                   ud::map<std::uint64_t,
+                           std::size_t,
+                           ud::hash<std::uint64_t>,
+                           std::equal_to<std::uint64_t>,
+                           std::allocator<std::pair<std::uint64_t, std::size_t>>,
+                           ud::bucket_type::group48>,
+                   ud::map<std::string,
+                           std::size_t,
+                           ud::hash<std::string>,
+                           std::equal_to<std::string>,
+                           std::allocator<std::pair<std::string, std::size_t>>,
+                           ud::bucket_type::group48>,
                    ud::set<std::uint64_t>,
                    ud::set<std::string>) {
     // 63, 64, 65 and 1025 values sit on the owning check's bitmap word boundaries: a bitmap a word
@@ -499,6 +511,12 @@ TEST_CASE("index_format_id") {
                             std::equal_to<std::uint64_t>,
                             std::allocator<std::pair<std::uint64_t, std::uint64_t>>,
                             ud::bucket_type::group_big>;
+    using u64_48 = ud::map<std::uint64_t,
+                           std::uint64_t,
+                           ud::hash<std::uint64_t>,
+                           std::equal_to<std::uint64_t>,
+                           std::allocator<std::pair<std::uint64_t, std::uint64_t>>,
+                           ud::bucket_type::group48>;
     // the values are not in it
     static_assert(u64_group::index_format_id == ud::map<std::uint64_t, std::string>::index_format_id);
     static_assert(u64_group::index_format_id == ud::set<std::uint64_t>::index_format_id);
@@ -507,6 +525,9 @@ TEST_CASE("index_format_id") {
     // the index layout and the hash are
     // group_big's value index is a size_t, so on a 32 bit target the two blocks are the same bytes
     static_assert((sizeof(std::size_t) == 4) == (u64_group::index_format_id == u64_big::index_format_id));
+    // group48's block is 120 bytes on every target, where the others are 88 or 152
+    static_assert(u64_48::index_format_id != u64_group::index_format_id);
+    static_assert(u64_48::index_format_id != u64_big::index_format_id);
     static_assert(u64_group::index_format_id != ud::map<std::string, std::uint64_t>::index_format_id);
     static_assert(ud::map<std::string, int>::index_format_id != ud::map<std::u16string, int>::index_format_id);
     static_assert(u64_group::index_format_id != ud::map<std::uint64_t, std::uint64_t, iv_seeded_hash>::index_format_id);
@@ -523,12 +544,12 @@ TEST_CASE("index_format_id") {
 }
 
 // The golden index files in data/index_format/, written on x86-64: a set<uint64_t> and a
-// set<std::string> of 2000 keys each, both bucket types, each with the index_format_id it was
+// set<std::string> of 2000 keys each, all three bucket types, each with the index_format_id it was
 // written under. Where the stored id equals today's, the bytes have to load and pass verify(full);
 // that is what catches a change to how keys are placed or found that forgot to bump
 // index_layout_version or hash_version. Where it differs, the format changed on purpose (or this
 // is a 32 bit target reading a group_big file) and the test says to regenerate. On the -m32 legs
-// the `group` files are the test that an index written on 64 bit reads on 32 bit.
+// the `group` and `group48` files are the test that an index written on 64 bit reads on 32 bit.
 //
 // Regenerate: UDM_WRITE_INDEX_FORMAT=data/index_format ./udm-test -tc=index_format_golden_write
 //
@@ -548,6 +569,13 @@ using iv_golden_str_big = ud::set<std::string,
                                   std::equal_to<std::string>,
                                   std::allocator<std::string>,
                                   ud::bucket_type::group_big>;
+using iv_golden_u64_group48 = ud::set<std::uint64_t,
+                                      ud::hash<std::uint64_t>,
+                                      std::equal_to<std::uint64_t>,
+                                      std::allocator<std::uint64_t>,
+                                      ud::bucket_type::group48>;
+using iv_golden_str_group48 = ud::
+    set<std::string, ud::hash<std::string>, std::equal_to<std::string>, std::allocator<std::string>, ud::bucket_type::group48>;
 
 constexpr std::size_t iv_golden_keys = 2000;
 
@@ -635,13 +663,15 @@ struct iv_type {
     using type = T;
 };
 
-// The four golden files and the set each one holds, one list for reading and writing.
+// The six golden files and the set each one holds, one list for reading and writing.
 template <typename F>
 void iv_for_each_golden(F f) {
     f(iv_type<iv_golden_u64>{}, "set_u64_group.bin");
     f(iv_type<iv_golden_u64_big>{}, "set_u64_group_big.bin");
     f(iv_type<iv_golden_str>{}, "set_str_group.bin");
     f(iv_type<iv_golden_str_big>{}, "set_str_group_big.bin");
+    f(iv_type<iv_golden_u64_group48>{}, "set_u64_group48.bin");
+    f(iv_type<iv_golden_str_group48>{}, "set_str_group48.bin");
 }
 
 } // namespace
@@ -669,7 +699,7 @@ TEST_CASE("index_format_golden_write") {
 }
 
 // The ids pinned, so that a change to anything folded into them is a decision: it makes every saved
-// index unreadable. Little endian only; the `group` ids are the same on 32 and 64 bit.
+// index unreadable. Little endian only; the `group` and `group48` ids are the same on 32 and 64 bit.
 TEST_CASE("index_format_id_pinned") {
     if constexpr (!iv_little_endian) {
         MESSAGE("skipped: the pinned ids are little endian");
@@ -686,6 +716,13 @@ TEST_CASE("index_format_id_pinned") {
                         std::allocator<std::pair<std::uint64_t, int>>,
                         ud::bucket_type::group_big>;
     REQUIRE(big::index_format_id == (sizeof(std::size_t) == 8 ? UINT64_C(0xc66c70dc1ff9d17e) : UINT64_C(0x282025bf1d34899)));
+    using g48 = ud::map<std::uint64_t,
+                        int,
+                        ud::hash<std::uint64_t>,
+                        std::equal_to<std::uint64_t>,
+                        std::allocator<std::pair<std::uint64_t, int>>,
+                        ud::bucket_type::group48>;
+    REQUIRE(g48::index_format_id == UINT64_C(0x74063a5c3785e218));
 }
 
 // Either allocation of the owning load can fail: the bitmap first, then the block array. The table

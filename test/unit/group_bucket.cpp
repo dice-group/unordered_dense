@@ -95,7 +95,8 @@ public:
     }
 };
 
-// One block is the group plus one value index per slot: 88 bytes for `group`, 152 for `group_big`.
+// One block is the group plus one value index per slot: 88 bytes for `group`, 120 for `group48`, 152
+// for `group_big`.
 template <typename Bucket>
 constexpr std::size_t block_bytes_v = sizeof(Bucket) + 16U * sizeof(typename Bucket::value_idx_type);
 
@@ -109,6 +110,8 @@ using watched_map_t = ankerl::unordered_dense::map<
     Bucket>;
 
 static_assert(block_bytes_v<ankerl::unordered_dense::bucket_type::group> == 88U);
+// six bytes on every target
+static_assert(block_bytes_v<ankerl::unordered_dense::bucket_type::group48> == 120U);
 #if SIZE_MAX == UINT32_MAX
 // a wide value index is size_t wide, so on a 32 bit target it is the same four bytes as the narrow
 // one and both blocks are 88
@@ -117,7 +120,8 @@ static_assert(block_bytes_v<ankerl::unordered_dense::bucket_type::group_big> == 
 static_assert(block_bytes_v<ankerl::unordered_dense::bucket_type::group_big> == 152U);
 #endif
 // ... so that the allocator above cannot mistake a pair of uint64_t for a block
-static_assert(sizeof(std::pair<uint64_t, uint64_t>) != 88U && sizeof(std::pair<uint64_t, uint64_t>) != 152U);
+static_assert(sizeof(std::pair<uint64_t, uint64_t>) != 88U && sizeof(std::pair<uint64_t, uint64_t>) != 120U &&
+              sizeof(std::pair<uint64_t, uint64_t>) != 152U);
 
 template <typename Bucket>
 void index_bytes_is_what_the_allocator_gave() {
@@ -154,9 +158,10 @@ void index_bytes_is_what_the_allocator_gave() {
 } // namespace
 
 TEST_CASE("index_bytes_against_the_allocator") {
-    // 88 bytes per sixteen slots, which is 5.5 per slot, and 152 where the wide value index is
-    // really wider
+    // 88 bytes per sixteen slots, which is 5.5 per slot, 120 with the 48 bit value index, and 152
+    // where the wide value index is really wider
     index_bytes_is_what_the_allocator_gave<ankerl::unordered_dense::bucket_type::group>();
+    index_bytes_is_what_the_allocator_gave<ankerl::unordered_dense::bucket_type::group48>();
     index_bytes_is_what_the_allocator_gave<ankerl::unordered_dense::bucket_type::group_big>();
 }
 
@@ -294,4 +299,6 @@ TEST_CASE("group_index_against_reference") {
     run_against_reference<u64_map<ankerl::unordered_dense::bucket_type::group>>(2, 3000, 200000, false);
     run_against_reference<u64_map<ankerl::unordered_dense::bucket_type::group>>(3, 100000, 300000, true);
     run_against_reference<u64_map<ankerl::unordered_dense::bucket_type::group_big>>(4, 3000, 200000, false);
+    run_against_reference<u64_map<ankerl::unordered_dense::bucket_type::group48>>(5, 3000, 200000, false);
+    run_against_reference<u64_map<ankerl::unordered_dense::bucket_type::group48>>(6, 100000, 300000, true);
 }

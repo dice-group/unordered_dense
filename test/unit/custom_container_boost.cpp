@@ -39,12 +39,20 @@ struct shm_remove {
 TYPE_TO_STRING_MAP(int, std::string, ankerl::unordered_dense::hash<int>, std::equal_to<int>, shmem_vector);
 
 // See https://www.boost.org/doc/libs/1_80_0/doc/html/interprocess/allocators_containers.html
+// The third map has the 48 bit value index, for a table in a segment like this one that can grow
+// past 2^32 values.
 TEST_CASE_TEMPLATE(
     "boost_container_vector",
     map_t,
     ankerl::unordered_dense::map<int, std::string, ankerl::unordered_dense::hash<int>, std::equal_to<int>, shmem_vector>,
     ankerl::unordered_dense::
-        segmented_map<int, std::string, ankerl::unordered_dense::hash<int>, std::equal_to<int>, shmem_allocator>) {
+        segmented_map<int, std::string, ankerl::unordered_dense::hash<int>, std::equal_to<int>, shmem_allocator>,
+    ankerl::unordered_dense::segmented_map<int,
+                                           std::string,
+                                           ankerl::unordered_dense::hash<int>,
+                                           std::equal_to<int>,
+                                           shmem_allocator,
+                                           ankerl::unordered_dense::bucket_type::group48>) {
 
     auto remover = shm_remove();
 
