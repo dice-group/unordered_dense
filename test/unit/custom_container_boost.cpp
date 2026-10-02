@@ -155,11 +155,14 @@ TEST_CASE("boost_allocator_parameter") {
     auto segment = boost::interprocess::managed_shared_memory(boost::interprocess::create_only, "MySharedMemory", 1024 * 1024);
     auto map = map_t{shmem_allocator{segment.get_segment_manager()}};
 
+    // operator[] with an lvalue key here, with an rvalue key below, and with a key of another type
+    // on the string map.
     int const total = 100;
     for (int i = 0; i < total; ++i) {
         map[i] = std::to_string(i);
     }
-    REQUIRE(map.size() == static_cast<size_t>(total));
+    map[1000] = "1000";
+    REQUIRE(map.size() == static_cast<size_t>(total + 1));
 
     int const key = 7;
     map[key] += "!";
@@ -171,7 +174,7 @@ TEST_CASE("boost_allocator_parameter") {
     REQUIRE_FALSE(inserted);
     REQUIRE((*it).first == 10);
     REQUIRE((*it).second == "ten");
-    REQUIRE(map.size() == static_cast<size_t>(total));
+    REQUIRE(map.size() == static_cast<size_t>(total + 1));
 
     auto copy = map;
     REQUIRE(copy == map);
