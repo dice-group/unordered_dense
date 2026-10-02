@@ -17,7 +17,8 @@ template <typename Map>
 void bench_find() {
     static constexpr size_t num_total = 4;
 
-    auto required_checksum = std::array<size_t, 5>{200000, 25198620, 50197240, 75195862, 100194482};
+    // The checksums depend on the shuffle of ankerl::nanobench::Rng in test/third-party/nanobench.h.
+    auto required_checksum = std::array<size_t, 5>{200000, 25198621, 50197241, 75195862, 100194482};
     auto total = std::chrono::steady_clock::duration();
 
     for (size_t num_found = 0; num_found < 5; ++num_found) {
