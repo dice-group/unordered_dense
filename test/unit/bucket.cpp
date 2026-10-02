@@ -159,12 +159,12 @@ TEST_CASE("group48_value_index_round_trip") {
     static_assert(std::is_trivially_copyable_v<idx48> && std::is_trivially_default_constructible_v<idx48>);
 
     auto values = std::vector<uint64_t>{0U, 1U, 0xFFFFFFFFU};
-    if constexpr (sizeof(size_t) == 8U) {
-        values.push_back(uint64_t{1} << 32U);
-        values.push_back((uint64_t{1} << 32U) + 1U);
-        values.push_back((uint64_t{1} << 48U) / 3U);
-        values.push_back((uint64_t{1} << 48U) - 1U);
-    }
+#if SIZE_MAX != UINT32_MAX
+    values.push_back(uint64_t{1} << 32U);
+    values.push_back((uint64_t{1} << 32U) + 1U);
+    values.push_back((uint64_t{1} << 48U) / 3U);
+    values.push_back((uint64_t{1} << 48U) - 1U);
+#endif
     for (auto const v : values) {
         INFO("v=" << v);
         auto idx = idx48{};
@@ -184,12 +184,13 @@ TEST_CASE("group48_value_index_round_trip") {
     // value initialized is 0, which is what the blocks of an empty index are made of
     REQUIRE(static_cast<size_t>(idx48{}) == 0U);
 
-    // 2^48 and more keep the low 48 bits. The table never stores such a value.
-    if constexpr (sizeof(size_t) == 8U) {
-        auto idx = idx48{};
-        idx = static_cast<size_t>((uint64_t{1} << 48U) + 5U);
-        REQUIRE(static_cast<size_t>(idx) == 5U);
-    }
+    // 2^48 and more keep the low 48 bits. The table never stores such a value. Not compiled for a
+    // 32 bit size_t, which this constant does not fit.
+#if SIZE_MAX != UINT32_MAX
+    auto too_wide = idx48{};
+    too_wide = static_cast<size_t>((uint64_t{1} << 48U) + 5U);
+    REQUIRE(static_cast<size_t>(too_wide) == 5U);
+#endif
 }
 
 // replace() refuses a container it could not index, and the boundary is the interesting part: the
