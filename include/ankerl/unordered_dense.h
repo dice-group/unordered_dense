@@ -2014,10 +2014,10 @@ template <class Key,
           bool IsSegmented>
 class table : public std::conditional_t<is_map_v<T>, base_table_type_map<T>, base_table_type_set> {
     using underlying_value_type = std::conditional_t<is_map_v<T>, std::pair<Key, T>, Key>;
-    // With an allocator whose pointer is a fancy pointer, for example boost::interprocess::offset_ptr,
-    // the values are in std::vector with that allocator. libstdc++'s vector iterator then has no
-    // operator-> that compiles, so the table reads a value through an iterator as `(*it).second`,
-    // never as `it->second`.
+    // With an allocator whose pointer does not convert to a raw pointer, for example
+    // boost::interprocess::offset_ptr, the values are in std::vector with that allocator, and
+    // operator-> of libstdc++'s vector iterator does not compile for them. So the table reads a value
+    // through an iterator as `(*it).second`, never as `it->second`.
     using underlying_container_type = std::conditional_t<IsSegmented,
                                                          segmented_vector<underlying_value_type, AllocatorOrContainer>,
                                                          std::vector<underlying_value_type, AllocatorOrContainer>>;
