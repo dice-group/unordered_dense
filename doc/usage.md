@@ -37,6 +37,7 @@ shapes `ankerl::unordered_dense::map` and `set` can be asked to take. The index 
 - [`segmented_map` and `segmented_set`](#segmented_map-and-segmented_set)
 - [Custom Bucket Types](#custom-bucket-types)
   - [`ankerl::unordered_dense::bucket_type::group`](#ankerlunordered_densebucket_typegroup)
+  - [`ankerl::unordered_dense::bucket_type::group48`](#ankerlunordered_densebucket_typegroup48)
   - [`ankerl::unordered_dense::bucket_type::group_big`](#ankerlunordered_densebucket_typegroup_big)
 - [Disabling the Vector Probe](#disabling-the-vector-probe)
 - [LLDB Data Formatters](#lldb-data-formatters)
@@ -316,14 +317,15 @@ everything the map allocates:
 auto total = map.index_bytes() + map.values().capacity() * sizeof(decltype(map)::value_type);
 ```
 
-The index is 5.5 bytes per slot with `bucket_type::group` and 9.5 with `bucket_type::group_big`, so
-a table at the maximum load factor of 0.8 spends about 6.9 bytes of index per element.
+The index is 5.5 bytes per slot with `bucket_type::group`, 7.5 with `bucket_type::group48` and 9.5
+with `bucket_type::group_big`, so a table with `group` at the maximum load factor of 0.8 spends about
+6.9 bytes of index per element.
 
 Do not compute this as `bucket_count() * sizeof(bucket_type)`. That was the index in 4.x, where
 there was one bucket per slot, and it is not one here: a bucket is a group of sixteen slots,
 `bucket_type` is only the 24 bytes of a group that the probe compares, and the sixteen value indices
-sit in the same block without being part of the type. The product reads 24 bytes per slot for both
-bucket types, and it still compiles, so nothing tells you. See
+sit in the same block without being part of the type. The product reads 24 bytes per slot for every
+bucket type, and it still compiles, so nothing tells you. See
 [upgrading from 4.x](upgrading-to-5.md).
 
 ### `auto replace(value_container_type&& container)`
@@ -518,10 +520,10 @@ The members:
   (below). Both work on views.
 
 The caller provides: values aligned for `value_type`, the index aligned for `index_block` (4 bytes
-for `bucket_type::group`, 8 for `group_big`), native byte order, the same hasher state as when the
-index was written, and bytes that do not change while a view reads them. A `MAP_SHARED` file that
-another process writes to, or truncates, under a view is outside that: write a new file and rename
-it into place.
+for `bucket_type::group`, 8 for `group_big`, any address for `group48`), native byte order, the
+same hasher state as when the index was written, and bytes that do not change while a view reads
+them. A `MAP_SHARED` file that another process writes to, or truncates, under a view is outside
+that: write a new file and rename it into place.
 
 ### What the check covers and what only `verify()` covers
 
@@ -558,6 +560,7 @@ The id rejects every "no" in this table:
 | | 32 and 64 bit, little endian | big and little endian |
 |---|---|---|
 | `bucket_type::group` index, this library's hashes | yes: the same bytes and the same id | no: value indices are native endian, and string hashes read native words |
+| `bucket_type::group48` index, this library's hashes | yes: its value index is 6 bytes on both, the same bytes and the same id | no: as for `group` |
 | `bucket_type::group_big` index | no: its value index is 4 bytes on 32 bit | no |
 | a hash built on `std::hash` | no: its result differs between standard libraries | no |
 | the values | the caller's bytes: `std::pair<uint32_t, uint64_t>` is 12 bytes on i386 and 16 on x86-64 | the caller's bytes |
@@ -756,6 +759,18 @@ works.
 
 * Up to 2^32 = 4.29 billion elements.
 * 5.5 bytes overhead per slot: one 88 byte block per group of sixteen slots, holding the sixteen fingerprints, the group's eight overflow counters and sixteen 4 byte value indices.
+
+### `ankerl::unordered_dense::bucket_type::group48`
+
+* Up to 2^48 = 281,474,976,710,656 elements.
+* 7.5 bytes overhead per slot: the same block with 6 byte value indices, so 120 bytes per group.
+* For a table that can grow past 2^32 elements and has to be small, for example one that lives in a
+  persistent memory segment. The map computes with `std::size_t` as with `group_big`, and reads a
+  value index as one 4 byte and one 2 byte load.
+* The index is an array of 2^k blocks. An allocator that rounds a large allocation up to a power of
+  two of bytes gives it 128 bytes per group, the same as `group`. `group_big` gets 256.
+* On a 32 bit target it holds up to 2^31 elements, as `group_big` does there, and its block is the
+  same 120 bytes, so its index reads the same on 32 and 64 bit.
 
 ### `ankerl::unordered_dense::bucket_type::group_big`
 

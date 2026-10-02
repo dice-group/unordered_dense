@@ -43,6 +43,7 @@ export namespace ankerl::unordered_dense {
       namespace bucket_type {
         using ankerl::unordered_dense::bucket_type::basic_group;
         using ankerl::unordered_dense::bucket_type::group;
+        using ankerl::unordered_dense::bucket_type::group48;
         using ankerl::unordered_dense::bucket_type::group_big;
       }
 #if defined(ANKERL_UNORDERED_DENSE_PMR)

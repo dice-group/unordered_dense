@@ -6,8 +6,13 @@
 #include <fmt/format.h>
 
 #include <array>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <limits>
 #include <stdexcept> // for out_of_range
+#include <type_traits>
+#include <vector>
 
 using map_default_t = ankerl::unordered_dense::map<std::string, size_t>;
 
@@ -19,19 +24,32 @@ using map_big_t = ankerl::unordered_dense::map<std::string,
                                                std::allocator<std::pair<std::string, size_t>>,
                                                ankerl::unordered_dense::bucket_type::group_big>;
 
+// the 48 bit value index allows 2^48 elements, at 2 more bytes per slot than the default
+using map_48_t = ankerl::unordered_dense::map<std::string,
+                                              size_t,
+                                              ankerl::unordered_dense::hash<std::string>,
+                                              std::equal_to<std::string>,
+                                              std::allocator<std::pair<std::string, size_t>>,
+                                              ankerl::unordered_dense::bucket_type::group48>;
+
 // A group is sixteen fingerprints and eight counters whatever its value index is; the indices are
-// beside it. Instantiating map_default_t, map_big_t and the group_micro map below is what fires
-// the table's own asserts on Bucket for these three.
+// beside it. Instantiating map_default_t, map_big_t, map_48_t and the group_micro and
+// group_packed16 maps below is what fires the table's own asserts on Bucket for these five.
 static_assert(sizeof(map_default_t::bucket_type) == 24U);
 static_assert(sizeof(map_big_t::bucket_type) == 24U);
+static_assert(sizeof(map_48_t::bucket_type) == 24U);
 static_assert(map_default_t::max_size() == map_default_t::max_bucket_count());
+static_assert(map_48_t::max_size() == map_48_t::max_bucket_count());
 
 #if SIZE_MAX == UINT32_MAX
 static_assert(map_default_t::max_size() == uint64_t{1} << 31U);
 static_assert(map_big_t::max_size() == uint64_t{1} << 31U);
+// six bytes can tell more values apart than a 32 bit size_t can count, so the bound is the size_t's
+static_assert(map_48_t::max_size() == uint64_t{1} << 31U);
 #else
 static_assert(map_default_t::max_size() == uint64_t{1} << 32U);
 static_assert(map_big_t::max_size() == uint64_t{1} << 63U);
+static_assert(map_48_t::max_size() == uint64_t{1} << 48U);
 #endif
 
 // A one byte value index, so that max_size() is 256 rather than 2^32 and the boundaries below can
@@ -79,6 +97,100 @@ TEST_CASE_MAP("group_micro",
         REQUIRE(it->first.get() == i);
         REQUIRE(it->second.get() == i);
     }
+}
+
+// group48's value index is a packed_value_idx of a std::uint32_t and a std::uint16_t, six bytes.
+// The same type of two one byte parts has max_size() 2^16, so its bound and its overflow can be
+// reached, and every value index from 256 on needs the second part.
+using group_packed16 =
+    ankerl::unordered_dense::bucket_type::basic_group<ankerl::unordered_dense::detail::packed_value_idx<uint8_t, uint8_t>>;
+
+TYPE_TO_STRING_MAP(size_t,
+                   size_t,
+                   ankerl::unordered_dense::hash<size_t>,
+                   std::equal_to<size_t>,
+                   std::allocator<std::pair<size_t, size_t>>,
+                   group_packed16);
+
+TEST_CASE_MAP("group_packed16",
+              size_t,
+              size_t,
+              ankerl::unordered_dense::hash<size_t>,
+              std::equal_to<size_t>,
+              std::allocator<std::pair<size_t, size_t>>,
+              group_packed16) {
+    static_assert(map_t::max_size() == 65536U);
+    static_assert(sizeof(typename map_t::index_block) == 24U + (16U * 2U));
+
+    auto map = map_t();
+    for (size_t i = 0; i < map_t::max_size(); ++i) {
+        REQUIRE(map.try_emplace(i, i).second);
+    }
+    REQUIRE(map.bucket_count() == map_t::max_bucket_count());
+    // NOLINTNEXTLINE(llvm-else-after-return,readability-else-after-return)
+    REQUIRE_THROWS_AS(map.try_emplace(map_t::max_size(), 0), std::overflow_error);
+
+    // the failed insert left nothing behind, and every element is found at the position its value
+    // index says
+    REQUIRE(map.size() == map_t::max_size());
+    for (size_t i = 0; i < map_t::max_size(); ++i) {
+        auto it = map.find(i);
+        REQUIRE(it != map.end());
+        REQUIRE(it->second == i);
+        REQUIRE(static_cast<size_t>(it - map.begin()) == i);
+    }
+
+    // An erase moves the last value into the hole: the slot of value 65535 is rewritten to 3. The
+    // insert after it takes value index 65535 again.
+    REQUIRE(map.erase(size_t{3}) == 1U);
+    REQUIRE(map.find(map_t::max_size() - 1) - map.begin() == 3);
+    REQUIRE(map.try_emplace(map_t::max_size(), 7).second);
+    REQUIRE(static_cast<size_t>(map.find(map_t::max_size()) - map.begin()) == map_t::max_size() - 1);
+    REQUIRE(map.size() == map_t::max_size());
+    REQUIRE(map.verify(ankerl::unordered_dense::verify_level::full));
+}
+
+// group48's value index: a std::uint32_t and then a std::uint16_t, each in native byte order. Every
+// value below 2^48 comes back through the std::size_t the table computes in, also across the
+// boundary of the two parts at 2^32.
+TEST_CASE("group48_value_index_round_trip") {
+    using idx48 = ankerl::unordered_dense::bucket_type::group48::value_idx_type;
+    static_assert(sizeof(idx48) == 6U && alignof(idx48) == 1U);
+    static_assert(std::is_trivially_copyable_v<idx48> && std::is_trivially_default_constructible_v<idx48>);
+
+    auto values = std::vector<uint64_t>{0U, 1U, 0xFFFFFFFFU};
+#if SIZE_MAX != UINT32_MAX
+    values.push_back(uint64_t{1} << 32U);
+    values.push_back((uint64_t{1} << 32U) + 1U);
+    values.push_back((uint64_t{1} << 48U) / 3U);
+    values.push_back((uint64_t{1} << 48U) - 1U);
+#endif
+    for (auto const v : values) {
+        INFO("v=" << v);
+        auto idx = idx48{};
+        idx = static_cast<size_t>(v);
+        REQUIRE(static_cast<size_t>(idx) == v);
+
+        auto const low = static_cast<uint32_t>(v);
+        auto const high = static_cast<uint16_t>(v >> 32U);
+        auto expected = std::array<unsigned char, 6>{};
+        std::memcpy(expected.data(), &low, sizeof(low));
+        std::memcpy(expected.data() + sizeof(low), &high, sizeof(high));
+        auto bytes = std::array<unsigned char, 6>{};
+        std::memcpy(bytes.data(), &idx, sizeof(idx));
+        REQUIRE(bytes == expected);
+    }
+
+    // value initialized is 0, which is what the blocks of an empty index are made of
+    REQUIRE(static_cast<size_t>(idx48{}) == 0U);
+
+    // 2^48 and more keep the low 48 bits. The table never stores such a value. Not compiled for a
+    // 32 bit size_t, which this constant does not fit.
+#if SIZE_MAX != UINT32_MAX
+    auto too_wide = idx48{};
+    too_wide = static_cast<size_t>((uint64_t{1} << 48U) + 5U);
+    REQUIRE(static_cast<size_t>(too_wide) == 5U);
+#endif
 }
 
 // replace() refuses a container it could not index, and the boundary is the interesting part: the
