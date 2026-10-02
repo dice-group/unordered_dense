@@ -110,12 +110,12 @@
 # One byte of hash matches by accident once in 256, so this is wrong from the first collision and
 # not before: a lookup for an absent key comes back with somebody else's value.
 <<<
-                auto const value_idx = group.m_index[lane];
+                value_idx_type const value_idx = group.m_index[lane];
                 if (m_equal(key, get_key(m_values[value_idx]))) {
                     return {group_idx, value_idx, static_cast<std::uint8_t>(lane), true};
                 }
 ===
-                auto const value_idx = group.m_index[lane];
+                value_idx_type const value_idx = group.m_index[lane];
                 static_cast<void>(key);
                 if (true) {
                     return {group_idx, value_idx, static_cast<std::uint8_t>(lane), true};

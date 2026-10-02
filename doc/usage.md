@@ -324,8 +324,8 @@ with `bucket_type::group_big`, so a table with `group` at the maximum load facto
 Do not compute this as `bucket_count() * sizeof(bucket_type)`. That was the index in 4.x, where
 there was one bucket per slot, and it is not one here: a bucket is a group of sixteen slots,
 `bucket_type` is only the 24 bytes of a group that the probe compares, and the sixteen value indices
-sit in the same block without being part of the type. The product reads 24 bytes per slot for both
-bucket types, and it still compiles, so nothing tells you. See
+sit in the same block without being part of the type. The product reads 24 bytes per slot for every
+bucket type, and it still compiles, so nothing tells you. See
 [upgrading from 4.x](upgrading-to-5.md).
 
 ### `auto replace(value_container_type&& container)`

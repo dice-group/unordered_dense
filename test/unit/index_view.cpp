@@ -699,7 +699,7 @@ TEST_CASE("index_format_golden_write") {
 }
 
 // The ids pinned, so that a change to anything folded into them is a decision: it makes every saved
-// index unreadable. Little endian only; the `group` and `group48` ids are the same on 32 and 64 bit.
+// index unreadable. Little endian only. The `group` and `group48` ids are the same on 32 and 64 bit.
 TEST_CASE("index_format_id_pinned") {
     if constexpr (!iv_little_endian) {
         MESSAGE("skipped: the pinned ids are little endian");
